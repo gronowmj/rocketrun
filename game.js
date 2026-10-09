@@ -1,8 +1,8 @@
 /* Rocket Run - an original game. An affectionate tribute to classic 1983 home-computer shooters. */
 (function () {
   'use strict';
-  const { PAL, S, sprite, text, textW } = window.RR;
-  const W = 256, H = 192, GROUND = 184, TOP = 18, STEP = 1000 / 60;
+  const { PAL, S, F, sprite, text, textW, hash } = window.RR;
+  const W = 256, H = 192, GROUND = 184, TOP = 18, STEP = 1000 / 60, PH = 24;
   const params = new URLSearchParams(location.search);
   const TEST = params.get('test') === '1';
 
@@ -15,18 +15,27 @@
   // ---------- world ----------
   const LEDGES = [{ x: 32, y: 80, w: 48, h: 6 }, { x: 120, y: 104, w: 32, h: 6 }, { x: 192, y: 56, w: 48, h: 6 }];
   const ROCKET_X = 168, START_X = 92;
-  const ALIEN_COLS = ['R', 'M', 'G', 'C', 'Y', 'W'];
+  // eight alien waves, one colour each; cycles every 8 levels. fr = frames, sh = ticks per frame
   const ALIEN_TYPES = [
-    { spr: 'meteor', w: 16, h: 7, pts: 25 },
-    { spr: 'ball', w: 12, h: 12, pts: 40 },
-    { spr: 'blob', w: 12, h: 12, pts: 50 },
-    { spr: 'saucer', w: 16, h: 8, pts: 80 }
+    { spr: 'meteor', w: 16, h: 8, pts: 25, col: 'R', sh: 3, flip: true },
+    { spr: 'ball', w: 12, h: 12, pts: 40, col: 'C', sh: 5 },
+    { spr: 'blob', w: 14, h: 14, pts: 50, col: 'G', sh: 6 },
+    { spr: 'saucer', w: 16, h: 10, pts: 80, col: 'M', sh: 4 },
+    { spr: 'jelly', w: 14, h: 14, pts: 60, col: 'Y', sh: 7 },
+    { spr: 'cross', w: 14, h: 14, pts: 70, col: 'W', sh: 3 },
+    { spr: 'bug', w: 14, h: 12, pts: 90, col: 'G', sh: 4 },
+    { spr: 'fighter', w: 16, h: 10, pts: 100, col: 'C', sh: 3, flip: true }
   ];
-  const GEMS = [{ spr: 'gem', w: 8, h: 8, pts: 250 }, { spr: 'bar', w: 12, h: 6, pts: 500 }, { spr: 'orb', w: 8, h: 8, pts: 750 }];
-  const ROCKET_COLS = ['W', 'C', 'Y', 'G', 'M', 'R'];
+  const GEMS = [{ spr: 'gem', w: 10, h: 7, pts: 250, col: 'C' }, { spr: 'bar', w: 12, h: 5, pts: 500, col: 'Y' }, { spr: 'orb', w: 9, h: 9, pts: 750, col: 'M' }];
+  const ROCKET_COLS = ['W', 'C', 'Y', 'G', 'R'];
+  const ROCKET_SHAPES = ['rocketA', 'rocketB', 'rocketC', 'rocketD'];
 
+  // three star layers: faint far dots, twinkling mid stars, a few bright cross-shaped near stars
   const stars = [];
-  for (let i = 0; i < 26; i++) stars.push({ x: ri(0, 255), y: ri(TOP + 2, GROUND - 4), p: ri(0, 200), s: ri(60, 200) });
+  for (let i = 0; i < 70; i++) {
+    const layer = i < 44 ? 0 : i < 64 ? 1 : 2;
+    stars.push({ x: ri(0, 255), y: ri(TOP + 2, GROUND - 6), p: ri(0, 400), s: [ri(150, 400), ri(70, 180), ri(90, 200)][layer], layer, col: pick(layer ? ['W', 'C', 'Y', 'W'] : ['b', 'b', 'w', 'c']) });
+  }
 
   let hi = 0;
   try { hi = parseInt(localStorage.getItem('rocketrun.hi') || '0', 10) || 0; } catch (e) { }
@@ -43,20 +52,20 @@
     s.x = a.x - W; return overlap(s, b);
   }
   function wrapX(o) { let c = o.x + o.w / 2; c = ((c % W) + W) % W; o.x = c - o.w / 2; }
-  const pbox = p => ({ x: p.x + 3, y: p.y + 1, w: 10, h: 19 });
+  const pbox = p => ({ x: p.x + 3, y: p.y + 1, w: 10, h: PH - 1 });
   const hitLedge = r => LEDGES.some(l => overlap(r, l));
 
   // ---------- game setup ----------
   function newGame() {
     Object.assign(G, { mode: 'play', modeT: 0, score: 0, lives: 4, level: 1, nextLife: 10000, rocketNo: 0,
-      beams: [], aliens: [], fx: [], items: [], gem: null, gemTimer: ri(500, 900), spawnT: 60, fuelT: 0,
+      beams: [], aliens: [], fx: [], smoke: [], items: [], gem: null, gemTimer: ri(500, 900), spawnT: 60, fuelT: 0,
       sub: 'play', subT: 0, banner: 90 });
     setupRocket(true);
     spawnPlayer();
   }
   function setupRocket(fresh) {
     const n = G.rocketNo;
-    G.rocket = { x: ROCKET_X, yOff: 0, vy: 0, parts: fresh ? 1 : 3, fuel: 0, shape: n % 2 ? 'rocketB' : 'rocketA', col: ROCKET_COLS[n % ROCKET_COLS.length] };
+    G.rocket = { x: ROCKET_X, yOff: 0, vy: 0, parts: fresh ? 1 : 3, fuel: 0, shape: ROCKET_SHAPES[n % ROCKET_SHAPES.length], col: ROCKET_COLS[n % ROCKET_COLS.length] };
     G.items = G.items.filter(i => i.kind === 'gem');
     if (fresh) {
       G.items.push({ kind: 'part', idx: 1, x: 128, y: 104 - 16, w: 16, h: 16, vy: 0, st: 'rest' });
@@ -65,7 +74,7 @@
     G.fuelT = 90;
   }
   function spawnPlayer() {
-    G.p = { x: START_X, y: GROUND - 20, w: 16, h: 20, vx: 0, vy: 0, face: 1, ground: true, carry: null, cool: 0, inv: 90, anim: 0, alive: true, thrusting: false };
+    G.p = { x: START_X, y: GROUND - PH, w: 16, h: PH, vx: 0, vy: 0, face: 1, ground: true, carry: null, cool: 0, recoil: 0, inv: 100, anim: 0, alive: true, thrusting: false };
   }
   const rocketTopY = () => GROUND - 16 * G.rocket.parts + G.rocket.yOff;
   const rocketRect = () => ({ x: G.rocket.x + 2, y: rocketTopY(), w: 12, h: 16 * G.rocket.parts });
@@ -191,7 +200,9 @@
     G.score += n;
     if (G.score >= G.nextLife) { G.nextLife += 10000; G.lives++; sfx.life(); G.lifeFlash = 90; }
   }
-  function explode(x, y, col, big) { G.fx.push({ x, y, t: 0, col: col || 'Y', big: !!big }); }
+  // kind: 'boom' (alien), 'big' (player / launch), 'puff' (meteor on a ledge); delay in ticks
+  const FX_LIFE = { boom: 24, big: 48, puff: 16 };
+  function explode(x, y, col, big, delay) { G.fx.push({ x, y, t: -(delay || 0), col: col || 'Y', kind: big === true ? 'big' : big || 'boom' }); }
 
   function update() {
     G.t++; G.modeT++;
@@ -200,7 +211,9 @@
     if (G.banner > 0) G.banner--;
     if (G.lifeFlash > 0) G.lifeFlash--;
     for (const f of G.fx) f.t++;
-    G.fx = G.fx.filter(f => f.t < 24);
+    G.fx = G.fx.filter(f => f.t < FX_LIFE[f.kind]);
+    for (const s of G.smoke) { s.t++; s.x += s.vx; s.y += s.vy; s.vx *= 0.97; }
+    G.smoke = G.smoke.filter(s => s.t < 60);
     if (G.sub === 'play') updatePlay();
     else if (G.sub === 'dying') {
       updateAliens(); updateItems();
@@ -214,16 +227,22 @@
     } else if (G.sub === 'launch') {
       G.subT++;
       if (G.subT > 40) { G.rocket.vy = Math.max(G.rocket.vy - 0.04, -3.5); G.rocket.yOff += G.rocket.vy; }
+      if (G.subT > 24 && G.subT < 150 && G.subT % 3 === 0) puffSmoke();
       if (G.rocket.yOff < -260) nextLevel();
     } else if (G.sub === 'land') {
       G.subT++;
       const r = G.rocket;
       r.yOff = Math.min(0, r.yOff + Math.max(0.5, -r.yOff / 40));
+      if (r.yOff > -40 && G.subT % 3 === 0) puffSmoke();
       if (r.yOff >= -0.01) { r.yOff = 0; G.sub = 'play'; spawnPlayer(); G.banner = 90; G.fuelT = 60; G.spawnT = 60; }
     }
     if (G.score > hi) hi = G.score;
   }
 
+  function puffSmoke() {
+    const cx = G.rocket.x + 8, side = rnd() < 0.5 ? -1 : 1;
+    G.smoke.push({ x: cx + side * ri(2, 6), y: GROUND - ri(4, 9), vx: side * (0.5 + rnd() * 0.9), vy: -rnd() * 0.15, t: 0 });
+  }
   function nextLevel() {
     G.level++;
     G.beams = []; G.aliens = [];
@@ -249,24 +268,25 @@
     p.y += p.vy; p.ground = false;
     b = pbox(p);
     for (const L of LEDGES) if (overlap(b, L)) {
-      if (p.vy > 0) { p.y = L.y - 20; p.ground = true; } else { p.y = L.y + L.h - 1; }
+      if (p.vy > 0) { p.y = L.y - PH; p.ground = true; } else { p.y = L.y + L.h - 1; }
       p.vy = 0; b = pbox(p);
     }
-    if (p.y + 20 >= GROUND) { p.y = GROUND - 20; p.vy = 0; p.ground = true; }
+    if (p.y + PH >= GROUND) { p.y = GROUND - PH; p.vy = 0; p.ground = true; }
     if (p.y < TOP) { p.y = TOP; p.vy = Math.max(p.vy, 0); }
     if (p.ground && p.vx !== 0) p.anim += Math.abs(p.vx) * 0.12; else if (p.ground) p.anim = 0;
     if (p.inv > 0) p.inv--;
 
     // laser
     if (p.cool > 0) p.cool--;
+    if (p.recoil > 0) p.recoil--;
     if (input('fire') && p.cool === 0) {
-      p.cool = 14;
-      G.beams.push({ x0: p.face > 0 ? p.x + 16 : p.x - 1, y: p.y + 8, dir: p.face, head: 0, tail: 0, t: 0, ph: ri(0, 7) });
+      p.cool = 14; p.recoil = 6;
+      G.beams.push({ x0: p.face > 0 ? p.x + 16 : p.x - 1, y: p.y + 12, dir: p.face, head: 0, tail: 0, t: 0, ph: ri(0, 7) });
       sfx.laser();
     }
     for (const bm of G.beams) {
-      bm.t++; bm.head = Math.min(bm.head + 9, 150);
-      if (bm.t > 9) bm.tail += 9;
+      bm.t++; bm.head = Math.min(bm.head + (bm.t < 4 ? 6 : 10), 160);
+      if (bm.t > 9) bm.tail += 10;
       const a = bm.x0 + bm.dir * bm.tail, c = bm.x0 + bm.dir * bm.head;
       const seg = { x: Math.min(a, c), y: bm.y - 1, w: Math.abs(c - a) + 1, h: 3 };
       for (const al of G.aliens) {
@@ -298,7 +318,7 @@
 
   function killPlayer() {
     const p = G.p;
-    explode(p.x + 8, p.y + 10, 'W', true); explode(p.x + 4, p.y + 4, 'C'); sfx.death();
+    explode(p.x + 8, p.y + 12, 'W', true); explode(p.x + 4, p.y + 4, 'C', 'boom', 6); explode(p.x + 12, p.y + 18, 'Y', 'boom', 12); sfx.death();
     if (p.carry) { p.carry.st = 'fall'; p.carry.vy = 0; p.carry = null; }
     p.alive = false; G.sub = 'dying'; G.subT = 0; G.beams = [];
   }
@@ -309,7 +329,7 @@
     const p = G.p, rk = G.rocket;
     for (const it of G.items) {
       if (it.st === 'carried') {
-        it.x = p.x + 8 - it.w / 2; it.y = p.y + 20 - it.h;
+        it.x = p.x + 8 - it.w / 2; it.y = p.y + PH - it.h;
         // over the rocket? let it go
         if (Math.abs((p.x + 8) - (rk.x + 8)) < 4 && G.sub === 'play') {
           it.st = 'drop'; it.x = rk.x + 8 - it.w / 2; it.vy = 0; p.carry = null;
@@ -350,18 +370,18 @@
     if (rk.parts === 3 && rk.fuel < 6 && !G.items.some(i => i.kind === 'fuel')) {
       if (--G.fuelT <= 0) {
         let x; do { x = ri(4, 236); } while (Math.abs(x - rk.x) < 20);
-        G.items.push({ kind: 'fuel', x, y: TOP, w: 12, h: 12, vy: 0, st: 'fall' });
+        G.items.push({ kind: 'fuel', x, y: TOP, w: 14, h: 14, vy: 0, st: 'fall' });
       }
     }
     if (rk.fuel >= 6 && !p.carry && overlapWrap(pbox(p), rocketRect())) {
       G.sub = 'launch'; G.subT = 0; rk.vy = 0; G.beams = [];
-      for (const a of G.aliens) explode(a.x + a.w / 2, a.y + a.h / 2, a.col);
+      G.aliens.forEach((a, i) => explode(a.x + a.w / 2, a.y + a.h / 2, a.col, 'boom', i * 4));
       G.aliens = []; p.alive = false; sfx.launch();
     }
   }
 
   function spawnAlien() {
-    const typ = (G.level - 1) % 4, T = ALIEN_TYPES[typ];
+    const typ = (G.level - 1) % ALIEN_TYPES.length, T = ALIEN_TYPES[typ];
     const sp = Math.min(1 + 0.22 * Math.floor((G.level - 1) / 4), 2);
     const p = G.p;
     let x, y, side, tries = 0;
@@ -371,9 +391,12 @@
       tries++;
     } while (tries < 10 && (Math.abs(y - p.y) < 34 && Math.min(Math.abs(x - p.x), W - Math.abs(x - p.x)) < 70 || LEDGES.some(L => overlap({ x, y, w: T.w, h: T.h }, L))));
     const dir = -side;
-    const a = { typ, spr: T.spr, w: T.w, h: T.h, pts: T.pts, x, y, col: pick(ALIEN_COLS), sp, t: ri(0, 50), vx: 0, vy: 0 };
+    const a = { typ, spr: T.spr, w: T.w, h: T.h, pts: T.pts, x, y, col: T.col, sp, t: ri(0, 50), vx: 0, vy: 0, squash: 0, dive: 0 };
     if (typ === 0) { a.vx = dir * (0.55 + rnd() * 0.45) * sp; a.vy = (0.15 + rnd() * 0.45) * sp * (rnd() < 0.3 ? -1 : 1); }
-    else if (typ === 1) { a.vx = dir * (0.6 + rnd() * 0.4) * sp; a.vy = (0.5 + rnd() * 0.5) * sp * (rnd() < 0.5 ? -1 : 1); }
+    else if (typ === 1 || typ === 5) { a.vx = dir * (0.6 + rnd() * 0.4) * sp; a.vy = (0.5 + rnd() * 0.5) * sp * (rnd() < 0.5 ? -1 : 1); }
+    else if (typ === 4) { a.vx = dir * 0.35 * sp; a.vy = 0; a.by = y; }
+    else if (typ === 6) { a.vx = dir * 0.75 * sp; a.vy = 0.6 * sp * (rnd() < 0.5 ? -1 : 1); }
+    else if (typ === 7) { a.vx = dir * (0.9 + rnd() * 0.3) * sp; a.vy = 0; }
     else { a.vx = dir * 0.5 * sp; a.vy = 0; }
     G.aliens.push(a);
   }
@@ -383,7 +406,16 @@
     for (const a of G.aliens) {
       if (a.dead) continue;
       a.t++;
-      if (a.typ >= 2 && p.alive) {
+      if (a.squash > 0) a.squash--;
+      if (a.typ === 4) a.vy = Math.sin(a.t / 18) * 0.45 * a.sp + (p.alive ? Math.sign(p.y - a.y) * 0.08 : 0);
+      else if (a.typ === 6 && a.t % 40 === 0) a.vy = -a.vy;
+      else if (a.typ === 7 && p.alive) {
+        const dx = ((p.x + 8 - (a.x + a.w / 2)) % W + W * 1.5) % W - W / 2;
+        if (!a.dive && Math.abs(dx) < 36 && Math.sign(dx) === Math.sign(a.vx) && a.t > 30) { a.dive = 1; a.vy = Math.sign(p.y + 12 - (a.y + a.h / 2)) * 1.3 * a.sp; }
+        if (a.dive) a.vy *= 0.985;
+        if (a.dive && Math.abs(a.vy) < 0.2) { a.dive = 0; a.vy = 0; a.t = 0; }
+      }
+      if ((a.typ === 2 || a.typ === 3) && p.alive) {
         const acc = (a.typ === 2 ? 0.03 : 0.014) * a.sp, mx = (a.typ === 2 ? 0.95 : 0.6) * a.sp;
         const dx = ((p.x + 8 - (a.x + a.w / 2)) % W + W * 1.5) % W - W / 2, dy = p.y + 10 - (a.y + a.h / 2);
         a.vx = Math.max(-mx, Math.min(mx, a.vx + Math.sign(dx) * acc));
@@ -391,14 +423,16 @@
       }
       a.x += a.vx;
       if (hitLedge(a)) {
-        if (a.typ === 0) { a.dead = true; explode(a.x + a.w / 2, a.y + a.h / 2, a.col); continue; }
+        if (a.typ === 0) { a.dead = true; explode(a.x + a.w / 2, a.y + a.h / 2, a.col, 'puff'); continue; }
         a.x -= a.vx; a.vx = -a.vx;
       }
       wrapX(a);
       a.y += a.vy;
       if (hitLedge(a) || a.y + a.h > GROUND) {
-        if (a.typ === 0) { a.dead = true; explode(a.x + a.w / 2, Math.min(a.y + a.h / 2, GROUND - 3), a.col); continue; }
-        a.y -= a.vy; a.vy = a.typ === 1 ? -a.vy : -a.vy * 0.5;
+        if (a.typ === 0) { a.dead = true; explode(a.x + a.w / 2, Math.min(a.y + a.h / 2, GROUND - 3), a.col, 'puff'); continue; }
+        a.y -= a.vy;
+        if (a.typ === 1 && a.vy > 0) a.squash = 6;
+        a.vy = (a.typ === 1 || a.typ === 5 || a.typ === 6) ? -a.vy : a.typ === 7 ? -a.vy * 0.6 : -a.vy * 0.5;
       }
       if (a.y < TOP) { a.y = TOP; a.vy = Math.abs(a.vy); }
     }
@@ -423,80 +457,127 @@
   function drawStars() {
     for (const s of stars) {
       const ph = (G.t + s.p) % s.s;
-      if (ph < 6) continue;
-      rect(s.x, s.y, 1, 1, ph < 14 ? 'W' : (s.p % 3 ? 'w' : 'c'));
+      if (s.layer === 0) { if (ph > 8) rect(s.x, s.y, 1, 1, s.col); continue; }
+      if (s.layer === 1) { if (ph < 5) continue; rect(s.x, s.y, 1, 1, ph < 12 ? 'W' : s.col.toLowerCase()); continue; }
+      // near stars: a cross-shaped twinkle every so often
+      rect(s.x, s.y, 1, 1, s.col);
+      if (ph < 10) { const c2 = ph < 4 || ph > 7 ? s.col.toLowerCase() : 'W'; rect(s.x - 1, s.y, 1, 1, c2); rect(s.x + 1, s.y, 1, 1, c2); rect(s.x, s.y - 1, 1, 1, c2); rect(s.x, s.y + 1, 1, 1, c2);
+        if (ph >= 4 && ph <= 7) { rect(s.x - 2, s.y, 1, 1, 'b'); rect(s.x + 2, s.y, 1, 1, 'b'); rect(s.x, s.y - 2, 1, 1, 'b'); rect(s.x, s.y + 2, 1, 1, 'b'); } }
     }
   }
-  function drawWorld() {
-    for (const L of LEDGES) {
-      rect(L.x, L.y, L.w, L.h, 'g');
-      rect(L.x, L.y, L.w, 1, 'G');
-      for (let x = L.x; x < L.x + L.w; x += 2) rect(x + ((x >> 1) & 1), L.y + 2 + ((x >> 1) & 1) * 2, 1, 1, 'G');
+  // static terrain (ledges + ground) is drawn once into its own layer
+  const LEDGE_TILE = ['WGGGGGGG', 'GGgGGGGg', 'GgkgGGgk', 'gGGGgGkG', 'GkGgGgGG', 'gggggggg'];
+  const GROUND_TILE = ['YYYYYYYYYYYYYYYY', 'yYyyyYyyyyYyyyYy', 'yyyYyyykyyyyYyyy', 'yYyyyyyyyYyyyyyk', 'yyykyYyyyyykyyYy', 'yYyyyyyYyyyyyyyy', 'yyyyYyyyykyYyyyy', 'kyykyyyykyyyykyy'];
+  let terrain = null;
+  function buildTerrain() {
+    terrain = document.createElement('canvas'); terrain.width = W; terrain.height = H;
+    const t = terrain.getContext('2d');
+    const px = (x, y, ch) => { t.fillStyle = PAL[ch]; t.fillRect(x, y, 1, 1); };
+    for (const L of LEDGES) for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
+      let ch = LEDGE_TILE[y][(x + L.x) % 8];
+      if (x === 0 || x === L.w - 1) ch = y === 0 ? 'G' : y === L.h - 1 ? 'k' : 'g';      // rounded, shaded ends
+      if ((x === 0 || x === L.w - 1) && y === L.h - 1) continue;
+      px(L.x + x, L.y + y, ch);
     }
-    rect(0, GROUND, W, H - GROUND, 'y');
-    rect(0, GROUND, W, 1, 'Y');
-    for (let x = 0; x < W; x += 2) { rect(x, GROUND + 2 + ((x >> 1) % 3) * 2, 1, 1, 'Y'); }
+    for (let y = GROUND; y < H; y++) for (let x = 0; x < W; x++) px(x, y, GROUND_TILE[y - GROUND][x % 16]);
+  }
+  function drawWorld() { if (!terrain) buildTerrain(); c.drawImage(terrain, 0, 0); }
+
+  // rocket: each segment cached in its colour and in fuel magenta; fuel fills from the bottom up
+  function drawRocketAt(shape, col, x, baseY, parts, fillRows, flash) {
+    const rows = S[shape];
+    for (let i = 0; i < parts; i++) {
+      const py = Math.round(baseY - 16 * (i + 1));
+      const k = Math.max(0, Math.min(16, fillRows - 16 * i));
+      if (k < 16) c.drawImage(sprite(shape + i, rows[i], false, col), 0, 0, 16, 16 - k, x, py, 16, 16 - k);
+      if (k > 0) c.drawImage(sprite(shape + i, rows[i], false, flash ? 'W' : 'M'), 0, 16 - k, 16, k, x, py + 16 - k, 16, k);
+    }
   }
   function drawRocket(launching) {
-    const rk = G.rocket, rows = S[rk.shape];
-    const baseY = GROUND + rk.yOff;
+    const rk = G.rocket, baseY = GROUND + rk.yOff;
     const ready = rk.fuel >= 6;
-    const fillRows = Math.round(rk.fuel / 6 * 48);
-    for (let i = 0; i < rk.parts; i++) {
-      const py = baseY - 16 * (i + 1);
-      const spr = rows[i];
-      for (let y = 0; y < 16; y++) {
-        const fromBottom = 16 * i + (15 - y);
-        const fueled = fromBottom < fillRows;
-        let col = rk.col;
-        if (fueled) col = ready && (G.t >> 3) % 2 ? 'W' : 'M';
-        for (let x = 0; x < 16; x++) {
-          const ch = spr[y][x];
-          if (ch === '.') continue;
-          rect(rk.x + x, py + y, 1, 1, ch === 'X' ? col : ch);
-        }
-      }
+    if (launching) drawPlume(rk.x + 2, baseY - 2, G.sub === 'launch' ? Math.min(34, 6 + G.subT / 2) : 34);
+    drawRocketAt(rk.shape, rk.col, rk.x, baseY, rk.parts, Math.round(rk.fuel / 6 * 48), ready && (G.t >> 3) % 2);
+  }
+  function drawPlume(x, y, len) {
+    len = Math.round(len);
+    if (len < 2) return;
+    const img = sprite('plume' + (G.t >> 1) % 4, S.plume[(G.t >> 1) % 4]);
+    c.drawImage(img, 0, 0, 14, len, x - 1, y, 14, len);
+  }
+  function drawSmoke() {
+    for (const s of G.smoke) {
+      const f = Math.min(4, s.t / 12 | 0);
+      draw(sprite('smoke' + f, S.smoke[f]), s.x - 7, s.y - 6);
     }
-    if (launching) {
-      for (let i = 0; i < 26; i++) rect(rk.x + 4 + ri(0, 7), baseY + ri(0, 3 + (G.subT >> 2)), 1, 2, pick(['R', 'Y', 'Y', 'W', 'r']));
+  }
+  // astronaut: 4-frame walk, tucked flying pose with jet flame, gun recoil, flashing when invulnerable
+  function manFrame(p) {
+    if (!p.ground) return 'fly';
+    if (p.vx !== 0) return 'walk' + (Math.floor(p.anim) % 4);
+    return 'stand';
+  }
+  function drawMan(x, y, face, pose, fire, thrust, tint, t) {
+    const key = (fire ? 'manf_' : 'man_') + pose, flip = face < 0;
+    x = Math.round(x); y = Math.round(y);
+    if (thrust) {
+      const f = (t >> 1) % 3;
+      draw(sprite('flame' + f, S.flame[f], flip, tint, !!tint), flip ? x + 11 : x + 1, y + 15);
     }
+    draw(sprite(key, S[key], flip, tint, !!tint), x, y);
   }
   function drawPlayer() {
     const p = G.p;
     if (!p.alive) return;
-    if (p.inv > 0 && (p.inv >> 2) % 2) return;
-    let legs = 'stand';
-    if (!p.ground) legs = 'fly';
-    else if (p.vx !== 0) legs = ['walk1', 'walk2', 'walk3', 'walk2'][Math.floor(p.anim) % 4];
-    const tint = p.inv > 0 ? ['C', 'M', 'Y', 'G'][(p.inv >> 1) % 4] : null;
-    const img = sprite('man_' + legs, S['man_' + legs], p.face < 0, tint, true);
-    if (p.thrusting && !p.ground) {
-      const fx = p.face > 0 ? p.x + 1 : p.x + 12;
-      for (let i = 0; i < 7; i++) rect(Math.round(fx + ri(0, 2)), Math.round(p.y + 14 + ri(0, 5)), 1, 1, pick(['R', 'Y', 'W']));
+    if (p.inv > 0 && (p.inv >> 2) % 3 === 0) return;
+    const tint = p.inv > 0 ? ['C', 'M', 'Y', 'G'][(p.inv >> 2) % 4] : null;
+    drawMan(p.x, p.y, p.face, manFrame(p), p.recoil > 2, p.thrusting && !p.ground, tint, G.t);
+    if (p.recoil > 3) {
+      const m = S.muzzle[p.recoil & 1];
+      draw(sprite('muzzle' + (p.recoil & 1), m), p.face > 0 ? p.x + 15 : p.x - 2, p.y + 11);
     }
-    draw(img, p.x, p.y);
   }
+  // laser: grows from the gun, bright segments cycle along it, fades from the tail
   const BEAM_COLS = ['W', 'Y', 'C', 'G', 'M', 'R', 'C', 'Y'];
   function drawBeams() {
     for (const bm of G.beams) {
       for (let d = bm.tail; d < bm.head; d++) {
-        const k = ((d >> 3) + bm.ph + (bm.t >> 1)) % 8;
-        if (d > bm.head - 40 && ((d * 7 + bm.t * 3) % 11) < 2) continue; // ragged leading edge
+        if (d > bm.head - 36 && ((d * 7 + bm.t * 3) % 11) < 2) continue; // ragged leading edge
         let x = Math.round(bm.x0 + bm.dir * d); x = ((x % W) + W) % W;
-        rect(x, bm.y, 1, 1, BEAM_COLS[k]);
+        const fromTail = bm.tail > 0 ? d - bm.tail : 99;
+        if (fromTail < 12) { if (fromTail > 4 && (d & 1)) rect(x, bm.y, 1, 1, 'r'); else if (fromTail > 8) rect(x, bm.y, 1, 1, 'R'); continue; }
+        rect(x, bm.y, 1, 1, d > bm.head - 6 ? 'W' : BEAM_COLS[((d / 6 | 0) + bm.ph + bm.t) % 8]);
       }
+      if (bm.head < 160) { let hx = Math.round(bm.x0 + bm.dir * bm.head); hx = ((hx % W) + W) % W; rect(hx, bm.y - 1, 1, 3, 'W'); }
     }
   }
   function drawFx() {
     for (const f of G.fx) {
-      const r = f.t * (f.big ? 0.9 : 0.6) + 1, n = f.big ? 14 : 9;
-      const col = f.t < 4 ? 'W' : f.t < 12 ? f.col : (f.t % 2 ? 'R' : 'r');
-      for (let i = 0; i < n; i++) {
-        const a = i / n * Math.PI * 2 + f.t * 0.05 + (i % 2) * 0.3;
-        const rr = r * (i % 3 === 0 ? 1 : 0.65);
-        const s = f.t < 10 ? 2 : 1;
-        rect(Math.round(f.x + Math.cos(a) * rr), Math.round(f.y + Math.sin(a) * rr), s, s, col);
-      }
+      if (f.t < 0) continue;
+      if (f.kind === 'puff') { const i = Math.min(3, f.t >> 2); draw(sprite('puff' + i, S.puff[i]), f.x - 5, f.y - 6); continue; }
+      const big = f.kind === 'big', set = big ? S.bigBoom : S.boom, n = set.length;
+      const i = Math.min(n - 1, Math.floor(f.t / (big ? 6 : 4)));
+      const img = sprite((big ? 'bigBoom' : 'boom') + i, set[i]);
+      // colour cycle: alternate frames flash white early, then go dim
+      draw((f.t & 2) && i < 2 ? sprite((big ? 'bigBoom' : 'boom') + i, set[i], false, 'W', true) : img, f.x - img.width / 2, f.y - img.height / 2);
+    }
+  }
+  function drawAlien(a) {
+    const T = ALIEN_TYPES[a.typ];
+    if (a.typ === 1 && a.squash > 0) { draw(sprite('ballSquash', S.ballSquash, false, a.col), a.x - 1, a.y + 3); return; }
+    const frames = S[a.spr], fi = Math.floor(a.t / T.sh) % frames.length;
+    draw(sprite(a.spr + fi, frames[fi], T.flip && a.vx < 0, a.col), a.x, a.y);
+  }
+  function drawItem(it) {
+    if (it.kind === 'part') { c.drawImage(sprite(G.rocket.shape + it.idx, S[G.rocket.shape][it.idx], false, G.rocket.col), Math.round(it.x), Math.round(it.y)); return; }
+    if (it.kind === 'fuel') { draw(sprite('fuel', S.fuel), it.x, it.y); return; }
+    if (it.life < 120 && (it.life >> 3) % 2) return;
+    draw(sprite(it.g.spr, S[it.g.spr], false, it.g.col), it.x, it.y);
+    const sf = (G.t >> 3) % 6;
+    if (sf < 4) {
+      const corner = ((G.t >> 5) + Math.round(it.x)) % 3;
+      const sx = corner === 0 ? it.x - 2 : corner === 1 ? it.x + it.w - 3 : it.x + it.w / 2 - 2, sy = corner === 2 ? it.y + it.h - 3 : it.y - 2;
+      draw(sprite('sparkle' + sf, S.sparkle[sf]), sx, sy);
     }
   }
   function drawHUD() {
@@ -514,17 +595,10 @@
   function drawGame() {
     drawStars(); drawWorld();
     const launching = G.sub === 'launch' || G.sub === 'land';
-    drawRocket(launching && (G.subT > 30 || G.sub === 'land'));
-    for (const it of G.items) {
-      if (it.kind === 'part') {
-        c.drawImage(sprite(G.rocket.shape + it.idx, S[G.rocket.shape][it.idx], false, G.rocket.col), Math.round(it.x), Math.round(it.y));
-      } else if (it.kind === 'fuel') draw(sprite('fuel', S.fuel), it.x, it.y);
-      else if (!(it.life < 120 && (it.life >> 3) % 2)) draw(sprite(it.g.spr, S[it.g.spr]), it.x, it.y);
-    }
-    for (const a of G.aliens) {
-      const fr = S[a.spr][(a.t >> 3) % 2];
-      draw(sprite(a.spr + ((a.t >> 3) % 2), fr, a.vx < 0, a.col), a.x, a.y);
-    }
+    drawRocket(launching && (G.subT > 24 || G.sub === 'land'));
+    drawSmoke();
+    for (const it of G.items) drawItem(it);
+    for (const a of G.aliens) drawAlien(a);
     drawPlayer(); drawBeams(); drawFx();
     drawHUD();
     if (G.banner > 0 && G.sub === 'play') {
@@ -539,27 +613,56 @@
     }
     if (G.paused) { rect(80, 84, 96, 24, 'k'); centre('PAUSED', 88, 'W', 2); }
   }
+  // big blocky logo: each font pixel is a 4x4 bevelled block; a colour band and a white glint sweep across
+  const LOGO = 'ROCKET RUN', LS = 4, LOGO_COLS = ['R', 'Y', 'G', 'C', 'B', 'M'];
+  function drawLogo(y0) {
+    const x0 = Math.round((W - textW(LOGO, LS)) / 2);
+    for (let i = 0; i < LOGO.length; i++) {
+      const g = F[LOGO[i]];
+      for (let r = 0; r < 7; r++) for (let q = 0; q < 5; q++) {
+        if (g[r][q] !== '#') continue;
+        const bx = x0 + (i * 6 + q) * LS, by = y0 + r * LS, gx = i * 6 + q;
+        const band = Math.floor((gx + r - (G.t >> 2)) / 6);
+        let col = LOGO_COLS[((band % 6) + 6) % 6];
+        const glint = ((gx + r * 2) - (G.t >> 1) % 140) ;
+        if (glint >= -1 && glint <= 1) col = 'W';
+        rect(bx + 1, by + 1, LS, LS, 'b');                       // drop shadow
+        rect(bx, by, LS, LS, col.toLowerCase());
+        rect(bx, by, LS - 1, LS - 1, col);
+        rect(bx, by, 1, 1, 'W');
+      }
+    }
+  }
   function drawTitle() {
     drawStars();
-    rect(0, GROUND, W, H - GROUND, 'y'); rect(0, GROUND, W, 1, 'Y');
-    // title with colour bands
-    const tcol = ['R', 'Y', 'G', 'C', 'M'];
-    const s = 'ROCKET RUN', sc = 3, x0 = Math.round((W - textW(s, sc)) / 2);
-    for (let i = 0; i < s.length; i++) text(c, s[i], x0 + i * 6 * sc, 22, tcol[(i + (G.t >> 4)) % tcol.length], sc, true);
-    // little scene
-    const shape = 'rocketA';
-    for (let i = 0; i < 3; i++) c.drawImage(sprite(shape + i, S[shape][i], false, 'W'), 206, GROUND - 16 * (i + 1));
+    if (!terrain) buildTerrain();
+    c.drawImage(terrain, 0, GROUND, W, H - GROUND, 0, GROUND, W, H - GROUND);
+    drawLogo(8);
+    centre('HI ' + pad(hi, 6), 42, 'W');
+    // little scene: astronaut hovering left, rocket fuelled on the right
     const bob = Math.round(Math.sin(G.t / 20) * 3);
-    c.drawImage(sprite('man_fly', S.man_fly), 28, 146 + bob);
-    for (let i = 0; i < 6; i++) rect(30 + ri(0, 2), 160 + bob + ri(0, 5), 1, 1, pick(['R', 'Y', 'W']));
-    for (let d = 0; d < 34; d++) rect(46 + d, 154 + bob, 1, 1, BEAM_COLS[((d >> 3) + (G.t >> 2)) % 8]);
-    c.drawImage(sprite('saucer' + ((G.t >> 3) % 2), S.saucer[(G.t >> 3) % 2], true, 'G'), 100 + Math.round(Math.sin(G.t / 30) * 8), 150);
-    centre('HI ' + pad(hi, 6), 52, 'W');
-    if ((G.t >> 4) % 2 === 0) centre('TAP OR PRESS ANY KEY TO START', 64, 'Y');
-    const lines = [['MOVE', 'Z X / A D / ARROWS', 'C'], ['THRUST', 'W / UP / SHIFT', 'C'], ['FIRE', 'SPACE / ENTER', 'C'], ['PAUSE', 'P    MUTE  M', 'C']];
-    lines.forEach((l, i) => { text(c, l[0], 60, 80 + i * 9, 'M'); text(c, l[1], 108, 80 + i * 9, 'W'); });
-    centre('AN AFFECTIONATE TRIBUTE TO', 120, 'w');
-    centre('CLASSIC 1983 HOME-COMPUTER SHOOTERS', 130, 'w');
+    drawMan(14, 132 + bob, 1, 'fly', (G.t % 60) < 4, true, null, G.t);
+    drawRocketAt('rocketA', 'W', 228, GROUND, 3, 30 + Math.round(Math.sin(G.t / 30) * 6), false);
+    const page = Math.floor(G.t / 420) % 2;
+    if (page === 0) {
+      centre('- SCORE TABLE -', 54, 'C');
+      ALIEN_TYPES.forEach((T, i) => {
+        const col = i % 2, row = i >> 1, x = 48 + col * 88, y = 66 + row * 18;
+        const fr = S[T.spr], fi = Math.floor(G.t / T.sh) % fr.length;
+        c.drawImage(sprite(T.spr + fi, fr[fi], false, T.col), x + Math.round((16 - T.w) / 2), y + Math.round((14 - T.h) / 2));
+        text(c, String(T.pts).padStart(3, ' '), x + 22, y + 4, T.col);
+        text(c, 'PTS', x + 44, y + 4, 'w');
+      });
+    } else {
+      centre('- CONTROLS -', 54, 'C');
+      const lines = [['MOVE', 'Z X / A D / ARROWS'], ['THRUST', 'W / UP / SHIFT'], ['FIRE', 'SPACE / ENTER'], ['PAUSE', 'P    MUTE  M']];
+      lines.forEach((l, i) => { text(c, l[0], 50, 70 + i * 11, 'M'); text(c, l[1], 98, 70 + i * 11, 'W'); });
+      text(c, 'BUILD THE ROCKET, FUEL IT', 54, 118, 'Y');
+      text(c, 'AND BLAST OFF!', 90, 128, 'Y');
+    }
+    if ((G.t >> 4) % 2 === 0) centre('TAP OR PRESS ANY KEY', 146, 'Y');
+    centre('AN ORIGINAL TRIBUTE TO', 160, 'w');
+    centre('1983 HOME-COMPUTER SHOOTERS', 169, 'w');
   }
   function render() {
     c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
@@ -641,7 +744,7 @@
   // ---------- test hook ----------
   if (TEST) {
     window.__game = {
-      G, keys, touch,
+      G, keys, touch, low,
       snapshot: () => ({ mode: G.mode, sub: G.sub, level: G.level, score: G.score, lives: G.lives, hi, paused: G.paused, muted,
         player: G.p && { x: G.p.x, y: G.p.y, vx: G.p.vx, vy: G.p.vy, ground: G.p.ground, face: G.p.face, alive: G.p.alive, carrying: G.p.carry ? G.p.carry.kind + (G.p.carry.idx || '') : null },
         beams: (G.beams || []).length, aliens: (G.aliens || []).length, items: (G.items || []).map(i => ({ kind: i.kind, idx: i.idx, st: i.st, x: i.x, y: i.y })),
