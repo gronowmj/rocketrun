@@ -2,7 +2,9 @@
 (function () {
   'use strict';
   const { PAL, S, F, sprite, text, textW, hash } = window.RR;
-  const W = 256, H = 192, GROUND = 184, TOP = 18, STEP = 1000 / 60, PH = 24;
+  const W = 256, TOP = 18, STEP = 1000 / 60, PH = 24;
+  // H is 192 (classic 4:3) in landscape; in portrait the playfield grows taller to fill the phone (up to 400)
+  let H = 192, GROUND = 184, VK = 1;
   const params = new URLSearchParams(location.search);
   const TEST = params.get('test') === '1';
 
@@ -13,7 +15,17 @@
   const pick = a => a[Math.floor(rnd() * a.length)];
 
   // ---------- world ----------
-  const LEDGES = [{ x: 32, y: 80, w: 48, h: 6 }, { x: 120, y: 104, w: 32, h: 6 }, { x: 192, y: 56, w: 48, h: 6 }];
+  // classic ledges are placed for a 192-high screen and spread proportionally on taller ones;
+  // two extra ledges appear on tall portrait screens so the lower half is not empty
+  const BASE_LEDGES = [{ x: 32, y: 80, w: 48 }, { x: 120, y: 104, w: 32 }, { x: 192, y: 56, w: 48 }];
+  const EXTRA_LEDGES = [{ x: 64, f: 0.76, w: 40 }, { x: 200, f: 0.62, w: 40 }];
+  let LEDGES = [];
+  const vscale = () => (GROUND - TOP) / (184 - TOP);
+  function buildLedges() {
+    const k = vscale();
+    LEDGES = BASE_LEDGES.map(L => ({ x: L.x, y: Math.round(TOP + (L.y - TOP) * k), w: L.w, h: 6 }));
+    if (H >= 288) for (const L of EXTRA_LEDGES) LEDGES.push({ x: L.x, y: Math.round(TOP + (GROUND - TOP) * L.f), w: L.w, h: 6 });
+  }
   const ROCKET_X = 168, START_X = 92;
   // eight alien waves, one colour each; cycles every 8 levels. fr = frames, sh = ticks per frame
   const ALIEN_TYPES = [
@@ -31,11 +43,19 @@
   const ROCKET_SHAPES = ['rocketA', 'rocketB', 'rocketC', 'rocketD'];
 
   // three star layers: faint far dots, twinkling mid stars, a few bright cross-shaped near stars
-  const stars = [];
-  for (let i = 0; i < 70; i++) {
-    const layer = i < 44 ? 0 : i < 64 ? 1 : 2;
-    stars.push({ x: ri(0, 255), y: ri(TOP + 2, GROUND - 6), p: ri(0, 400), s: [ri(150, 400), ri(70, 180), ri(90, 200)][layer], layer, col: pick(layer ? ['W', 'C', 'Y', 'W'] : ['b', 'b', 'w', 'c']) });
+  // (own generator so resizing the playfield never disturbs the game's random sequence)
+  let stars = [];
+  function makeStars() {
+    let ss = 777; const sr = () => { ss = (ss * 1103515245 + 12345) & 0x7fffffff; return ss / 0x80000000; };
+    const si = (a, b) => a + Math.floor(sr() * (b - a + 1)), sp = a => a[Math.floor(sr() * a.length)];
+    const n = Math.round(70 * H / 192), n0 = Math.round(n * 44 / 70), n1 = Math.round(n * 64 / 70);
+    stars = [];
+    for (let i = 0; i < n; i++) {
+      const layer = i < n0 ? 0 : i < n1 ? 1 : 2;
+      stars.push({ x: si(0, 255), y: si(TOP + 2, GROUND - 6), p: si(0, 400), s: [si(150, 400), si(70, 180), si(90, 200)][layer], layer, col: sp(layer ? ['W', 'C', 'Y', 'W'] : ['b', 'b', 'w', 'c']) });
+    }
   }
+  buildLedges(); makeStars();
 
   let hi = 0;
   try { hi = parseInt(localStorage.getItem('rocketrun.hi') || '0', 10) || 0; } catch (e) { }
@@ -68,8 +88,8 @@
     G.rocket = { x: ROCKET_X, yOff: 0, vy: 0, parts: fresh ? 1 : 3, fuel: 0, shape: ROCKET_SHAPES[n % ROCKET_SHAPES.length], col: ROCKET_COLS[n % ROCKET_COLS.length] };
     G.items = G.items.filter(i => i.kind === 'gem');
     if (fresh) {
-      G.items.push({ kind: 'part', idx: 1, x: 128, y: 104 - 16, w: 16, h: 16, vy: 0, st: 'rest' });
-      G.items.push({ kind: 'part', idx: 2, x: 48, y: 80 - 16, w: 16, h: 16, vy: 0, st: 'rest' });
+      G.items.push({ kind: 'part', idx: 1, x: 128, y: LEDGES[1].y - 16, w: 16, h: 16, vy: 0, st: 'rest' });
+      G.items.push({ kind: 'part', idx: 2, x: 48, y: LEDGES[0].y - 16, w: 16, h: 16, vy: 0, st: 'rest' });
     }
     G.fuelT = 90;
   }
@@ -228,7 +248,7 @@
       G.subT++;
       if (G.subT > 40) { G.rocket.vy = Math.max(G.rocket.vy - 0.04, -3.5); G.rocket.yOff += G.rocket.vy; }
       if (G.subT > 24 && G.subT < 150 && G.subT % 3 === 0) puffSmoke();
-      if (G.rocket.yOff < -260) nextLevel();
+      if (G.rocket.yOff < -(GROUND + 76)) nextLevel();
     } else if (G.sub === 'land') {
       G.subT++;
       const r = G.rocket;
@@ -248,7 +268,7 @@
     G.beams = []; G.aliens = [];
     G.items = G.items.filter(i => i.kind === 'gem');
     if ((G.level - 1) % 4 === 0) { G.rocketNo++; setupRocket(true); G.sub = 'play'; spawnPlayer(); G.banner = 90; G.spawnT = 60; }
-    else { G.rocket.yOff = -200; G.rocket.vy = 0; G.rocket.fuel = 0; G.sub = 'land'; G.subT = 0; sfx.land(); }
+    else { G.rocket.yOff = -(GROUND + 16); G.rocket.vy = 0; G.rocket.fuel = 0; G.sub = 'land'; G.subT = 0; sfx.land(); }
   }
 
   function updatePlay() {
@@ -259,8 +279,8 @@
     else if (r && !l) { p.vx = Math.min(p.vx + 0.14, 1.3); p.face = 1; }
     else { const fr = p.ground ? 0.2 : 0.035; p.vx = Math.abs(p.vx) <= fr ? 0 : p.vx - Math.sign(p.vx) * fr; }
     p.thrusting = th;
-    if (th) p.vy = Math.max(p.vy - 0.13, -1.4);
-    else p.vy = Math.min(p.vy + 0.07, 1.7);
+    if (th) p.vy = Math.max(p.vy - 0.13 * VK, -1.4 * VK);
+    else p.vy = Math.min(p.vy + 0.07 * VK, 1.7 * VK);
     p.x += p.vx;
     let b = pbox(p);
     for (const L of LEDGES) if (overlap(b, L)) { if (p.vx > 0) p.x = L.x - 13; else if (p.vx < 0) p.x = L.x + L.w - 3; p.vx = 0; b = pbox(p); }
@@ -300,7 +320,8 @@
     updateAliens();
     // alien spawning
     const cyc = Math.floor((G.level - 1) / 4);
-    const maxA = Math.min(4 + cyc + (G.level > 1 ? 1 : 0), 8);
+    const extra = Math.round((vscale() - 1) * 1.6);   // a taller screen holds a couple more aliens
+    const maxA = Math.min(4 + cyc + (G.level > 1 ? 1 : 0), 8) + extra;
     if (--G.spawnT <= 0 && G.aliens.length < maxA) { spawnAlien(); G.spawnT = ri(30, 80); }
     // gems
     if (!G.items.some(i => i.kind === 'gem') && --G.gemTimer <= 0) {
@@ -338,7 +359,7 @@
         continue;
       }
       if (it.st === 'fall' || it.st === 'drop') {
-        it.vy = Math.min(it.vy + 0.06, it.st === 'drop' ? 1.6 : 1.1);
+        it.vy = Math.min(it.vy + 0.06, it.st === 'drop' ? 1.6 : 1.1 * VK);
         const ny = it.y + it.vy;
         if (it.st === 'drop') {
           if (it.kind === 'part') {
@@ -607,11 +628,12 @@
     }
     if (G.sub === 'launch' && G.subT < 60 && (G.subT >> 3) % 2) centre('LIFT OFF!', 40, 'Y', 2);
     if (G.mode === 'over') {
-      rect(48, 76, 160, 40, 'k');
-      centre('GAME OVER', 82, (G.modeT >> 4) % 2 ? 'R' : 'Y', 2);
-      centre('SCORE ' + pad(G.score, 6), 104, 'W');
+      const oy = Math.round(H / 2) - 20;
+      rect(48, oy, 160, 40, 'k');
+      centre('GAME OVER', oy + 6, (G.modeT >> 4) % 2 ? 'R' : 'Y', 2);
+      centre('SCORE ' + pad(G.score, 6), oy + 28, 'W');
     }
-    if (G.paused) { rect(80, 84, 96, 24, 'k'); centre('PAUSED', 88, 'W', 2); }
+    if (G.paused) { const py = Math.round(H / 2) - 12; rect(80, py, 96, 24, 'k'); centre('PAUSED', py + 4, 'W', 2); }
   }
   // big blocky logo: each font pixel is a 4x4 bevelled block; a colour band and a white glint sweep across
   const LOGO = 'ROCKET RUN', LS = 4, LOGO_COLS = ['R', 'Y', 'G', 'C', 'B', 'M'];
@@ -633,36 +655,68 @@
       }
     }
   }
+  function scoreTable(y0) {
+    centre('- SCORE TABLE -', y0, 'C');
+    ALIEN_TYPES.forEach((T, i) => {
+      const col = i % 2, row = i >> 1, x = 48 + col * 88, y = y0 + 12 + row * 18;
+      const fr = S[T.spr], fi = Math.floor(G.t / T.sh) % fr.length;
+      c.drawImage(sprite(T.spr + fi, fr[fi], false, T.col), x + Math.round((16 - T.w) / 2), y + Math.round((14 - T.h) / 2));
+      text(c, String(T.pts).padStart(3, ' '), x + 22, y + 4, T.col);
+      text(c, 'PTS', x + 44, y + 4, 'w');
+    });
+  }
+  function controlsPage(y0) {
+    centre('- CONTROLS -', y0, 'C');
+    const lines = [['MOVE', 'Z X / A D / ARROWS'], ['THRUST', 'W / UP / SHIFT'], ['FIRE', 'SPACE / ENTER'], ['PAUSE', 'P    MUTE  M']];
+    lines.forEach((l, i) => { text(c, l[0], 50, y0 + 16 + i * 11, 'M'); text(c, l[1], 98, y0 + 16 + i * 11, 'W'); });
+    text(c, 'BUILD THE ROCKET, FUEL IT', 54, y0 + 64, 'Y');
+    text(c, 'AND BLAST OFF!', 90, y0 + 74, 'Y');
+  }
   function drawTitle() {
     drawStars();
     if (!terrain) buildTerrain();
     c.drawImage(terrain, 0, GROUND, W, H - GROUND, 0, GROUND, W, H - GROUND);
-    drawLogo(8);
-    centre('HI ' + pad(hi, 6), 42, 'W');
     // little scene: astronaut hovering left, rocket fuelled on the right
     const bob = Math.round(Math.sin(G.t / 20) * 3);
-    drawMan(14, 132 + bob, 1, 'fly', (G.t % 60) < 4, true, null, G.t);
+    drawMan(14, GROUND - 52 + bob, 1, 'fly', (G.t % 60) < 4, true, null, G.t);
     drawRocketAt('rocketA', 'W', 228, GROUND, 3, 30 + Math.round(Math.sin(G.t / 30) * 6), false);
-    const page = Math.floor(G.t / 420) % 2;
-    if (page === 0) {
-      centre('- SCORE TABLE -', 54, 'C');
-      ALIEN_TYPES.forEach((T, i) => {
-        const col = i % 2, row = i >> 1, x = 48 + col * 88, y = 66 + row * 18;
-        const fr = S[T.spr], fi = Math.floor(G.t / T.sh) % fr.length;
-        c.drawImage(sprite(T.spr + fi, fr[fi], false, T.col), x + Math.round((16 - T.w) / 2), y + Math.round((14 - T.h) / 2));
-        text(c, String(T.pts).padStart(3, ' '), x + 22, y + 4, T.col);
-        text(c, 'PTS', x + 44, y + 4, 'w');
-      });
+    if (H >= 296) {
+      // tall portrait screen: logo, score table and controls all at once, centred above the scene
+      const y0 = 8 + Math.max(0, Math.round((GROUND - 64 - 222) / 2));
+      drawLogo(y0);
+      centre('HI ' + pad(hi, 6), y0 + 36, 'W');
+      scoreTable(y0 + 52);
+      controlsPage(y0 + 142);
     } else {
-      centre('- CONTROLS -', 54, 'C');
-      const lines = [['MOVE', 'Z X / A D / ARROWS'], ['THRUST', 'W / UP / SHIFT'], ['FIRE', 'SPACE / ENTER'], ['PAUSE', 'P    MUTE  M']];
-      lines.forEach((l, i) => { text(c, l[0], 50, 70 + i * 11, 'M'); text(c, l[1], 98, 70 + i * 11, 'W'); });
-      text(c, 'BUILD THE ROCKET, FUEL IT', 54, 118, 'Y');
-      text(c, 'AND BLAST OFF!', 90, 128, 'Y');
+      drawLogo(8);
+      centre('HI ' + pad(hi, 6), 42, 'W');
+      if (Math.floor(G.t / 420) % 2 === 0) scoreTable(54); else controlsPage(54);
     }
-    if ((G.t >> 4) % 2 === 0) centre('TAP OR PRESS ANY KEY', 146, 'Y');
-    centre('AN ORIGINAL TRIBUTE TO', 160, 'w');
-    centre('1983 HOME-COMPUTER SHOOTERS', 169, 'w');
+    if ((G.t >> 4) % 2 === 0) centre('TAP OR PRESS ANY KEY', GROUND - 38, 'Y');
+    centre('AN ORIGINAL TRIBUTE TO', GROUND - 24, 'w');
+    centre('1983 HOME-COMPUTER SHOOTERS', GROUND - 15, 'w');
+  }
+  // change the playfield height (portrait <-> landscape); a game in progress is carried across proportionally
+  function setWorld(h) {
+    if (h === H) return;
+    const oldG = GROUND, f = y => TOP + (y - TOP) * (h - 8 - TOP) / (oldG - TOP);
+    H = h; GROUND = H - 8; VK = Math.min(1.35, Math.sqrt(vscale()));
+    buildLedges(); makeStars(); terrain = null;
+    low.width = W; low.height = H;
+    if (G.mode === 'play' && G.p) {
+      const p = G.p;
+      p.y = Math.min(f(p.y + PH), GROUND) - PH - 1; p.ground = false;
+      for (const it of G.items) {
+        if (it.st === 'carried') continue;
+        if (it.st === 'drop') { it.y = Math.min(it.y + GROUND - oldG, rocketTopY() - it.h); continue; }
+        it.y = Math.min(f(it.y + it.h), GROUND) - it.h - 1; it.st = 'fall';
+      }
+      for (const a of G.aliens) a.y = Math.max(TOP, Math.min(f(a.y), GROUND - a.h - 1));
+      for (const fx of G.fx) fx.y = f(fx.y);
+      for (const sm of G.smoke) sm.y += GROUND - oldG;
+      G.beams = [];
+      if (G.sub === 'land') G.rocket.yOff = Math.max(G.rocket.yOff, -(GROUND + 16));
+    }
   }
   function render() {
     c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
@@ -684,21 +738,28 @@
     const portrait = vh >= vw * 0.9;
     document.body.classList.toggle('land', !portrait);
     if (portrait) {
-      gw = vw - s.l - s.r; gh = gw * 0.75;
-      if (gh > vh * 0.56) { gh = vh * 0.56; gw = gh * 4 / 3; }
-      gx = (vw - gw) / 2; gy = s.t;
-      const sysY = gy + gh + 8, sysS = 34;
+      // controls get a thumb-sized strip at the bottom; everything above the pause/mute row is game.
+      // The playfield is 256 wide (fills the width) and as tall as the space allows (192..400, multiples of 8).
+      const sysS = 34, gapA = 8, gapB = 10, gap = 10;
+      const top = s.t, bottom = vh - Math.max(s.b, 10) - 6;
+      const bh0 = Math.max(96, Math.min(Math.round(vh * 0.19), 170));
+      const availH = bottom - top - gapA - sysS - gapB - bh0;
+      let sc = (vw - s.l - s.r) / W;
+      let lh = Math.max(192, Math.min(400, Math.floor(availH / sc / 8) * 8));
+      if (lh * sc > availH) sc = availH / lh;            // very short screens: shrink to keep the controls
+      setWorld(lh);
+      gw = W * sc; gh = lh * sc; gx = (vw - gw) / 2; gy = top;
+      const sysY = gy + gh + gapA;
       place($('bPause'), s.l + 10, sysY, sysS, sysS);
       place($('bMute'), vw - s.r - 10 - sysS, sysY, sysS, sysS);
-      const padTop = sysY + sysS + 10, padBot = vh - Math.max(s.b, 10) - 6;
-      const bh = Math.max(60, Math.min(padBot - padTop, 200));
-      const by = padBot - bh, gap = 10, half = (vw - s.l - s.r - 30) / 2;
-      const bw = (half - gap) / 2;
+      const by = sysY + sysS + gapB, bh = Math.max(56, bottom - by);
+      const half = (vw - s.l - s.r - 30) / 2, bw = (half - gap) / 2;
       place($('bLeft'), s.l + 10, by, bw, bh);
       place($('bRight'), s.l + 10 + bw + gap, by, bw, bh);
       place($('bThrust'), vw - s.r - 10 - 2 * bw - gap, by, bw, bh);
       place($('bFire'), vw - s.r - 10 - bw, by, bw, bh);
     } else {
+      setWorld(192);
       const side = 150;
       gh = vh - s.t - s.b - 8; gw = gh * 4 / 3;
       const maxW = vw - s.l - s.r - 2 * side - 16;
@@ -756,7 +817,8 @@
       step: n => { for (let i = 0; i < (n || 1); i++) update(); render(); },
       setPlayer: (x, y, face) => { Object.assign(G.p, { x, y, vx: 0, vy: 0 }); if (face) G.p.face = face; },
       pickNextPart: () => { const it = G.items.find(i => i.kind === 'part' && i.idx === nextPartIdx()); if (!it) return false; Object.assign(G.p, { x: it.x, y: it.y - 4, vx: 0, vy: 0 }); return true; },
-      moveOverRocket: () => { Object.assign(G.p, { x: G.rocket.x, y: 70, vx: 0, vy: 0 }); },
+      moveOverRocket: () => { Object.assign(G.p, { x: G.rocket.x, y: GROUND - 114, vx: 0, vy: 0 }); },
+      dims: () => ({ W, H, GROUND, TOP, ledges: LEDGES.map(L => ({ ...L })) }),
       addFuel: n => { G.rocket.parts = 3; if (G.p.carry && G.p.carry.kind !== 'gem') G.p.carry = null; G.items = G.items.filter(i => i.kind === 'gem'); G.rocket.fuel = Math.min(6, G.rocket.fuel + (n || 6)); },
       spawnAlien: (x, y, vx, vy) => { spawnAlien(); const a = G.aliens[G.aliens.length - 1]; if (x !== undefined) Object.assign(a, { x, y, vx: vx || a.vx, vy: vy || 0 }); return G.aliens.length; },
       clearAliens: () => { G.aliens = []; G.spawnT = 100000; },
